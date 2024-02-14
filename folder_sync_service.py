@@ -14,6 +14,9 @@ class FolderSyncService:
         self.source_file_info = {}  # Stores information about source files
         self.replica_file_info = {}  # Stores information about replica files
 
+        # Configure logging
+        self._configure_logging()
+
         # Check if source folder exists
         if not self.source_path.exists():
             raise ValueError(f"Provided source folder path does not exist")
@@ -21,10 +24,7 @@ class FolderSyncService:
         # Check if replica folder exists
         if not self.replica_path.is_dir():
             self.replica_path.mkdir(parents=True, exist_ok=True)
-            print(f"Replica folder created under the following path: {self.replica_path}")
-
-        # Configure logging
-        self._configure_logging()
+            self.logger.info(f"Replica folder: '{self.replica_path}' created")
 
     def _configure_logging(self):
         """Configure logging to both file and console."""
@@ -51,7 +51,7 @@ class FolderSyncService:
         self.logger.addHandler(console_handler)
 
     @staticmethod
-    def _get_file_info(folder_path: Path) -> dict[str, Path]:
+    def _get_file_info(folder_path: Path) -> dict[Path, str]:
         """
         Getting information about files in a directory: file paths and md5.
         :param folder_path:
@@ -61,19 +61,8 @@ class FolderSyncService:
         for file in folder_path.glob('**/*'):
             if file.is_file():
                 checksum = md5(file.read_bytes()).hexdigest()
-                file_info[checksum] = file
-
+                file_info[file.relative_to(folder_path)] = checksum
         return file_info
-
-    def _get_replica_checksum(self, file_path: Path):
-        """
-        Get the checksum from replica file info based on source file path.
-        """
-        relative_path = file_path.relative_to(self.source_path)
-        for checksum, path in self.replica_file_info.items():
-            if path.relative_to(self.replica_path) == relative_path:
-                return checksum
-        return None
 
     def _sync_dirs(self):
         """
@@ -83,26 +72,35 @@ class FolderSyncService:
         self.replica_file_info = self._get_file_info(self.replica_path)
 
         # Check if in replica folder there is a file which is not in source and remove if needed
-        for checksum in self.replica_file_info:
-            if checksum not in self.source_file_info:
-                file = self.replica_file_info[checksum]
+        for relative_path, checksum in self.replica_file_info.items():
+            if relative_path not in self.source_file_info:
+                file = self.replica_path / relative_path
                 file.unlink()
-                self.logger.info(f"File {file} removed")
+                self.logger.info(f"File {file} removed from replica")
 
         # Check if in source folder there is a file which is not in replica and copy if needed
         # When the checksums don't match - replace it
-        for src_checksum, file_path in self.source_file_info.items():
-            replica = self.replica_path / file_path.relative_to(self.source_path)
-            replica_checksum = self._get_replica_checksum(file_path)
-            if not replica.exists() or replica_checksum != src_checksum:
-                shutil.copy2(file_path, replica)
-                self.logger.info(f"File {file_path} copied to File {replica}")
+        for relative_path, checksum in self.source_file_info.items():
+            source_file = self.source_path / relative_path
+            replica_file = self.replica_path / relative_path
+            replica_checksum = self.replica_file_info.get(relative_path)
+
+            # Create parent directories in replica path if they don't exist
+            replica_file.parent.mkdir(parents=True, exist_ok=True)
+
+            if not replica_file.exists() or replica_checksum != checksum:
+                # If the source file is a directory, use shutil.copytree to copy recursively
+                if source_file.is_dir():
+                    shutil.copytree(source_file, replica_file, dirs_exist_ok=True)
+                    self.logger.info(f"Folder {source_file} copied to {replica_file}")
+                else:
+                    shutil.copy2(source_file, replica_file)
+                    self.logger.info(f"File {source_file} copied to {replica_file}")
 
     def run_sync_loop(self):
         """Run synchronization in a loop with the specified interval."""
         iteration_number = 1
         while True:
-            # self.logger.info(f"This is {iteration_number} iteration")
             self._sync_dirs()
             iteration_number += 1
             time.sleep(self.sync_interval)
