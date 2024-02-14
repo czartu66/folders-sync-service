@@ -79,7 +79,6 @@ class FolderSyncService:
                 self.logger.info(f"File {file} removed from replica")
 
         # Check if in source folder there is a file which is not in replica and copy if needed
-        # When the checksums don't match - replace it
         for relative_path, checksum in self.source_file_info.items():
             source_file = self.source_path / relative_path
             replica_file = self.replica_path / relative_path
